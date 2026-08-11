@@ -387,6 +387,45 @@ var Store = (function () {
                (d.attendance && d.attendance.length) );
   }
 
+  // 把仅存于本机 IndexedDB 的旧图片 id（如 img_xxx）转成内联 data URL 写回云端，
+  // 使其他设备也能看到。仅在本机持有该图片时生效——上传设备重新打开 App 即自动自愈。
+  function migrateInlineImages() {
+    var d = data();
+    var records = (d && d.records) || [];
+    var tasks = [];
+    records.forEach(function (r) {
+      (r.images || []).forEach(function (imgId, idx) {
+        if (typeof imgId !== 'string') return;
+        if (imgId.indexOf('http') === 0 || imgId.indexOf('data:') === 0 || imgId.indexOf('seed:') === 0) return;
+        tasks.push({ r: r, idx: idx, id: imgId });
+      });
+    });
+    if (!tasks.length) return Promise.resolve(0);
+    return Promise.all(tasks.map(function (t) {
+      return DB.getImage(t.id).then(function (rec) {
+        if (!rec) return false;
+        var src = rec.full || rec.thumb;
+        if (!src) return false;
+        if (src.indexOf('data:') === 0) { t.r.images[t.idx] = src; return true; }
+        if (src.indexOf('blob:') === 0) {
+          return fetch(src).then(function (resp) { return resp.blob(); }).then(function (blob) {
+            return new Promise(function (resolve) {
+              var fr = new FileReader();
+              fr.onload = function () { t.r.images[t.idx] = fr.result; resolve(true); };
+              fr.onerror = function () { resolve(false); };
+              fr.readAsDataURL(blob);
+            });
+          }).catch(function () { return false; });
+        }
+        return false;
+      }).catch(function () { return false; });
+    })).then(function (results) {
+      var changed = results.filter(Boolean).length;
+      if (changed) { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} save(); }
+      return changed;
+    });
+  }
+
   function syncFromCloud() {
     if (!window.Cloud || !Cloud.ready()) return Promise.resolve(null);
     return Cloud.load().then(function (res) {
@@ -1319,7 +1358,7 @@ var Store = (function () {
   return {
     SUBJECTS: SUBJECTS, GRADES: GRADES, GRADE_TEXT: GRADE_TEXT, GRADE_COLOR: GRADE_COLOR, ROLE_TEXT: ROLE_TEXT,
     CULTURE_SUBJECTS: CULTURE_SUBJECTS, SHIFTS: SHIFTS, shift: shift, PERIODS: PERIODS,
-    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, hasRealData: hasRealData,
+    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
     login: login, logout: logout, currentUser: currentUser, changePassword: changePassword,
     getStudent: getStudent, getClass: getClass, className: className, allStudents: allStudents,
     studentUsers: studentUsers, subject: subject, studentSubjects: studentSubjects, setStudentSubjects: setStudentSubjects,

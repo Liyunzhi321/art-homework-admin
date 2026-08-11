@@ -178,6 +178,7 @@ var App = (function () {
   function boot() {
     if (window.Cloud) Cloud.init();
     Store.load();
+    Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
     if (!location.hash) location.hash = Store.currentUser() ? '#/home' : '#/login';
     window.addEventListener('hashchange', function () {
       try { render(); } catch (e) { console.error('render error:', e); }
@@ -188,6 +189,7 @@ var App = (function () {
       Cloud.load().then(function (res) {
         if (res && res.payload && res.payload.users) {
           Store.merge(res.payload); render();
+          Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
         } else if (Store.hasRealData && Store.hasRealData()) {
           // 云端为空但本机有真实数据 → 作为共享基线推上去（恢复）
           Cloud.save(Store.data(), new Date().toISOString());
@@ -199,6 +201,7 @@ var App = (function () {
           var modalOpen = document.getElementById('modal-root') && document.getElementById('modal-root').children.length;
           if (ts && !modalOpen) render();
         });
+        Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
       }
       setInterval(syncTick, 30000);
       document.addEventListener('visibilitychange', function () { if (!document.hidden) syncTick(); });
