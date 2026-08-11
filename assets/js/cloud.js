@@ -81,6 +81,15 @@ var Cloud = (function () {
       .catch(function () { return null; });
   }
 
+  // 轻量探活：只拉 updated_at，用于判断云端是否变化（避免每次轮询都下载整行大体积 JSON）
+  function loadMeta() {
+    if (!ready()) return Promise.resolve(null);
+    return fetch(rest() + '?id=eq.' + ROW_ID + '&select=updated_at', { headers: apiHeaders() })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) { return (rows && rows[0]) ? rows[0].updated_at : null; })
+      .catch(function () { return null; });
+  }
+
   // 写入云端（先 PATCH，若行不存在则 POST 插入）
   function save(payload, updatedAt) {
     if (!ready()) return Promise.resolve(false);
@@ -170,7 +179,7 @@ var Cloud = (function () {
 
   return {
     init: init, ready: ready, setConfig: setConfig, persist: persist,
-    load: load, save: save, test: test,
+    load: load, loadMeta: loadMeta, save: save, test: test,
     uploadImage: uploadImage, deleteImage: deleteImage,
     markSync: markSync, lastSync: lastSync,
     url: function () { return SUPABASE_URL; },

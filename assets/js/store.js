@@ -199,12 +199,14 @@ var Store = (function () {
 
   /* ---------------- 持久化 ---------------- */
   var cloudTimer = null;
+  var lastCloudAt = null; // 最近一次已知云端 updated_at；用于轻量轮询判断"是否有变化"
   function scheduleCloud() {
     if (!window.Cloud || !Cloud.ready()) return;
     if (cloudTimer) clearTimeout(cloudTimer);
     cloudTimer = setTimeout(function () {
       cloudTimer = null;
       if (!state || !state.users) return;
+      var ts = new Date().toISOString();
       // 推送前先拉取云端最新，并与本地双向合并（墓碑并集 + 逐项 LWW），
       // 确保本端删除（墓碑）不会因推送旧副本而复活，也不会覆盖别人的新改动。
       Cloud.load().then(function (res) {
@@ -213,7 +215,7 @@ var Store = (function () {
           state = rec;
           try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
         }
-        return Cloud.save(state, new Date().toISOString());
+        return Cloud.save(state, ts).then(function () { lastCloudAt = ts; });
       }).catch(function () {
         // 拉取失败：不盲目用本地覆盖云端，避免把他人已删除的数据又推回去（删除复活 bug）
         return Promise.resolve(false);
@@ -431,6 +433,7 @@ var Store = (function () {
     return Cloud.load().then(function (res) {
       if (res && res.payload && res.payload.users) {
         merge(res.payload);
+        lastCloudAt = res.updated_at; // 记录已同步的云端时间戳，供轻量轮询判断是否变化
         return { ok: true, action: 'pull', at: res.updated_at };
       }
       // 云端为空：本机若有真实数据则作为共享基线恢复上去；否则不盲目用空壳覆盖云端
@@ -441,6 +444,17 @@ var Store = (function () {
       }
       return null;
     }).catch(function () { return null; });
+  }
+  // 轻量轮询：先只取云端 updated_at，没变化就跳过（省流量）；变了才拉完整数据并合并。
+  // 返回 Promise<boolean>：本次是否真正拉取并合并了新数据。
+  function poll() {
+    if (!window.Cloud || !Cloud.ready()) return Promise.resolve(false);
+    return Cloud.loadMeta().then(function (at) {
+      if (!at) return false;
+      if (at === lastCloudAt) return false; // 云端无变化，跳过繁重拉取
+      lastCloudAt = at;
+      return syncFromCloud().then(function (r) { return !!r; });
+    }).catch(function () { return false; });
   }
   function data() { return state || load(); }
 
@@ -1361,7 +1375,7 @@ var Store = (function () {
   return {
     SUBJECTS: SUBJECTS, GRADES: GRADES, GRADE_TEXT: GRADE_TEXT, GRADE_COLOR: GRADE_COLOR, ROLE_TEXT: ROLE_TEXT,
     CULTURE_SUBJECTS: CULTURE_SUBJECTS, SHIFTS: SHIFTS, shift: shift, PERIODS: PERIODS,
-    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
+    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, poll: poll, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
     login: login, logout: logout, currentUser: currentUser, changePassword: changePassword, needsPasswordChange: needsPasswordChange,
     getStudent: getStudent, getClass: getClass, className: className, allStudents: allStudents,
     studentUsers: studentUsers, subject: subject, studentSubjects: studentSubjects, setStudentSubjects: setStudentSubjects,

@@ -197,14 +197,15 @@ var App = (function () {
         // 云端空且本机也无真实数据：保持云端为空，等待有数据的设备恢复，避免用空壳覆盖
       });
       function syncTick() {
-        Store.syncFromCloud().then(function (ts) {
+        Store.poll().then(function (changed) {
           var modalOpen = document.getElementById('modal-root') && document.getElementById('modal-root').children.length;
-          if (ts && !modalOpen) render();
+          if (changed && !modalOpen) render();
         });
         Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
       }
-      setInterval(syncTick, 30000);
+      setInterval(syncTick, 5000);
       document.addEventListener('visibilitychange', function () { if (!document.hidden) syncTick(); });
+      window.addEventListener('online', syncTick);
     }
     document.addEventListener('click', function (e) {
       var t = e.target.closest && e.target.closest('#sideLogout');
