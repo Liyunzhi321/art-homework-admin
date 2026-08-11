@@ -74,7 +74,7 @@ var Store = (function () {
     var students = [], users = [];
 
     users.push({
-      id: 'u_teacher', role: 'teacher', account: 'teacher', password: '123456',
+      id: 'u_teacher', role: 'teacher', account: 'teacher', password: '123456', pwdSet: false,
       name: '江江', title: '美术教师', createdAt: todayStr(), updatedAt: SEED_TS
     });
 
@@ -89,11 +89,11 @@ var Store = (function () {
         joinedAt: '2026-03-01', active: true, updatedAt: SEED_TS
       });
       users.push({
-        id: 'u_' + sid, role: 'student', account: no.toLowerCase(), password: '123456',
+        id: 'u_' + sid, role: 'student', account: no.toLowerCase(), password: '123456', pwdSet: false,
         name: nm, studentId: sid, createdAt: '2026-03-01', updatedAt: SEED_TS
       });
       users.push({
-        id: 'u_p_' + sid, role: 'parent', account: 'p' + no.toLowerCase(), password: '123456',
+        id: 'u_p_' + sid, role: 'parent', account: 'p' + no.toLowerCase(), password: '123456', pwdSet: false,
         name: nm + '家长', studentId: sid, createdAt: '2026-03-01', updatedAt: SEED_TS
       });
     });
@@ -463,6 +463,8 @@ var Store = (function () {
     return { ok: true, user: u };
   }
   function logout() { localStorage.removeItem(SESSION_KEY); }
+  // 首次登录强制改密码：账号尚未主动设置过密码(pwdSet 为 false/undefined)即需强制修改
+  function needsPasswordChange(u) { return !!(u && !u.pwdSet); }
   function currentUser() {
     try {
       var s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
@@ -475,6 +477,7 @@ var Store = (function () {
     if (!u) return { ok: false, msg: '用户不存在' };
     if (u.password !== oldPwd) return { ok: false, msg: '原密码不正确' };
     u.password = newPwd;
+    u.pwdSet = true; // 用户已主动修改过密码，解除首次强制改密
     u.updatedAt = new Date().toISOString(); // 必须更新时间戳，否则云端合并(last-write-wins)时默认密码可能因时间戳更旧而无法被新密码覆盖
     save();
     return { ok: true };
@@ -649,11 +652,11 @@ var Store = (function () {
       joinedAt: todayStr(), active: true, updatedAt: new Date().toISOString()
     });
     d.users.push({
-      id: 'u_' + sid, role: 'student', account: payload.account, password: payload.password || '123456',
+      id: 'u_' + sid, role: 'student', account: payload.account, password: payload.password || '123456', pwdSet: false,
       name: payload.name, studentId: sid, createdAt: todayStr(), updatedAt: new Date().toISOString()
     });
     d.users.push({
-      id: 'u_p_' + sid, role: 'parent', account: payload.parentAccount || ('p' + payload.account),
+      id: 'u_p_' + sid, role: 'parent', account: payload.parentAccount || ('p' + payload.account), pwdSet: false,
       password: payload.parentPassword || '123456', name: payload.name + '家长', studentId: sid, createdAt: todayStr(), updatedAt: new Date().toISOString()
     });
     save();
@@ -715,7 +718,7 @@ var Store = (function () {
   }
   function resetPassword(userId, pwd) {
     var u = data().users.filter(function (x) { return x.id === userId; })[0];
-    if (u) { u.password = pwd; u.updatedAt = new Date().toISOString(); save(); }
+    if (u) { u.password = pwd; u.pwdSet = false; u.updatedAt = new Date().toISOString(); save(); }
   }
   function addClass(name) {
     var d = data();
@@ -730,7 +733,7 @@ var Store = (function () {
     }
     var id = uid('u');
     d.users.push({
-      id: id, role: 'teacher', account: payload.account, password: payload.password || '123456',
+      id: id, role: 'teacher', account: payload.account, password: payload.password || '123456', pwdSet: false,
       name: payload.name, title: payload.title || '美术教师', createdAt: todayStr(), updatedAt: new Date().toISOString()
     });
     save();
@@ -1359,7 +1362,7 @@ var Store = (function () {
     SUBJECTS: SUBJECTS, GRADES: GRADES, GRADE_TEXT: GRADE_TEXT, GRADE_COLOR: GRADE_COLOR, ROLE_TEXT: ROLE_TEXT,
     CULTURE_SUBJECTS: CULTURE_SUBJECTS, SHIFTS: SHIFTS, shift: shift, PERIODS: PERIODS,
     load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
-    login: login, logout: logout, currentUser: currentUser, changePassword: changePassword,
+    login: login, logout: logout, currentUser: currentUser, changePassword: changePassword, needsPasswordChange: needsPasswordChange,
     getStudent: getStudent, getClass: getClass, className: className, allStudents: allStudents,
     studentUsers: studentUsers, subject: subject, studentSubjects: studentSubjects, setStudentSubjects: setStudentSubjects,
     studentCultureSubjects: studentCultureSubjects, setStudentCultureSubjects: setStudentCultureSubjects,

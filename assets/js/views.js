@@ -3,6 +3,38 @@
    ============================================================ */
 var Views = {};
 
+/* 首次登录强制改密码：不可关闭的浮层，完成后才进入系统 */
+function forceChange(user, done) {
+  var ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(20,16,40,.55);display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML =
+    '<div style="background:#fff;border-radius:16px;max-width:380px;width:100%;padding:22px;box-shadow:0 20px 60px rgba(0,0,0,.3)">' +
+      '<h3 style="margin:0 0 4px;font-size:18px">🔐 首次登录，请修改密码</h3>' +
+      '<p style="margin:0 0 16px;color:#666;font-size:13px;line-height:1.6">为了你的账号安全，<b>首次登录必须设置新密码</b>（至少 4 位）。设置后其他设备也会同步生效。</p>' +
+      '<div class="field"><label>当前密码</label><input class="input" id="fcOld" type="password" placeholder="请输入当前密码" style="width:100%"></div>' +
+      '<div class="field"><label>新密码</label><input class="input" id="fcNew" type="password" placeholder="至少 4 位" style="width:100%"></div>' +
+      '<div class="field"><label>确认新密码</label><input class="input" id="fcCfm" type="password" placeholder="再次输入新密码" style="width:100%"></div>' +
+      '<div id="fcErr" style="color:#e23;font-size:13px;min-height:18px;margin-bottom:8px"></div>' +
+      '<button class="btn lg block" id="fcOk" style="background:#5A4FCF;color:#fff;border:none">确认修改并进入</button>' +
+    '</div>';
+  document.body.appendChild(ov);
+  setTimeout(function () { var o = document.getElementById('fcOld'); if (o) o.focus(); }, 60);
+  document.getElementById('fcOk').onclick = function () {
+    var old = document.getElementById('fcOld').value;
+    var np = document.getElementById('fcNew').value;
+    var cf = document.getElementById('fcCfm').value;
+    var err = document.getElementById('fcErr');
+    if (!old || !np || !cf) { err.textContent = '请填写全部字段'; return; }
+    if (np.length < 4) { err.textContent = '新密码至少 4 位'; return; }
+    if (np !== cf) { err.textContent = '两次输入的新密码不一致'; return; }
+    var r = Store.changePassword(user.id, old, np);
+    if (!r.ok) { err.textContent = r.msg || '修改失败'; return; }
+    ov.remove();
+    UI.toast('密码已设置，欢迎 ' + user.name, 'ok');
+    done();
+  };
+}
+
 /* -------------------------------------------------- 登录页 */
 Views.login = {
   title: '登录',
@@ -57,14 +89,26 @@ Views.login = {
               }).join('') +
             '</div>' +
           '</div>' +
+        '<div class="login-hint" id="accHint" style="margin-top:12px;font-size:12px;color:#8a85a8;line-height:1.6"></div>' +
         '</div></div>' +
       '</div>';
   },
   mount: function () {
     var role = (typeof sessionStorage !== 'undefined') ? (sessionStorage.getItem('ahm_login_role') || 'teacher') : 'teacher';
+    function updateHint(r) {
+      var map = {
+        teacher: '教师账号通常为 <code>teacher</code>，初始密码 123456。',
+        student: '学生账号为<b>学号小写</b>，例如 <code>a01</code>（对应学号 A01）。',
+        parent: '家长账号为学生学号前加 <code>p</code>，例如 <code>pa01</code>。'
+      };
+      var el = document.getElementById('accHint');
+      if (el) el.innerHTML = '📌 ' + (map[r] || '');
+    }
+    updateHint(role);
     UI.els('#roleTabs .role-tab').forEach(function (b) {
       b.onclick = function () {
         sessionStorage.setItem('ahm_login_role', b.dataset.role);
+        updateHint(b.dataset.role);
         App.render();
       };
     });
@@ -80,6 +124,11 @@ Views.login = {
       if (!acc || !pwd) { UI.el('#loginErr').innerHTML = '<div class="login-error">请输入账号和密码</div>'; return; }
       var res = Store.login(role, acc, pwd);
       if (!res.ok) { UI.el('#loginErr').innerHTML = '<div class="login-error">' + UI.esc(res.msg) + '</div>'; return; }
+      // 首次登录强制改密码：完成前不进入系统
+      if (Store.needsPasswordChange(res.user)) {
+        forceChange(res.user, function () { location.hash = '#/home'; App.render(); });
+        return;
+      }
       UI.toast('登录成功，欢迎 ' + res.user.name, 'ok');
       location.hash = '#/home';
       App.render();

@@ -3,6 +3,52 @@
    ============================================================ */
 var SB_SQL = "create table if not exists class_state(id text primary key default 'main', payload jsonb not null, updated_at timestamptz default now()); alter table class_state enable row level security; create policy \"public all\" on class_state for all using (true) with check (true); insert into class_state(id,payload) values('main','{}'::jsonb) on conflict(id) do nothing;";
 var SB_STORAGE_SQL = "insert into storage.buckets (id, name, public) values ('artwork','artwork',true) on conflict (id) do nothing; create policy \"artwork upload\" on storage.objects for insert to anon with check ( bucket_id = 'artwork' ); create policy \"artwork read\" on storage.objects for select to anon using ( bucket_id = 'artwork' ); create policy \"artwork delete\" on storage.objects for delete to anon using ( bucket_id = 'artwork' );";
+/* 账号密码清单：构造可复制/打印的文本与 HTML（含真实密码，仅教师可见） */
+function buildAccSheetText(d) {
+  var lines = [];
+  lines.push('画室作业管家 · 账号密码清单');
+  lines.push('网址：' + location.origin + location.pathname);
+  lines.push('');
+  (d.users || []).filter(function (u) { return u.role === 'teacher'; }).forEach(function (u) {
+    lines.push('【教师】' + u.name);
+    lines.push('  账号：' + u.account + '    密码：' + u.password);
+  });
+  lines.push('');
+  (d.students || []).forEach(function (s) {
+    var su = (d.users || []).filter(function (u) { return u.role === 'student' && u.studentId === s.id; })[0];
+    var pu = (d.users || []).filter(function (u) { return u.role === 'parent' && u.studentId === s.id; })[0];
+    lines.push('【' + s.name + '（' + s.no + '）】');
+    if (su) lines.push('  学生端：账号 ' + su.account + '    密码 ' + su.password);
+    if (pu) lines.push('  家长端：账号 ' + pu.account + '    密码 ' + pu.password);
+  });
+  return lines.join('\n');
+}
+function buildAccSheetHTML(d) {
+  var html = '';
+  var teachers = (d.users || []).filter(function (u) { return u.role === 'teacher'; });
+  if (teachers.length) {
+    html += '<div class="sheet-sec"><b>教师</b>' + teachers.map(function (u) {
+      return '<div class="sheet-row">👩‍🏫 ' + UI.esc(u.name) + '：账号 <code>' + UI.esc(u.account) + '</code>　密码 <code>' + UI.esc(u.password) + '</code></div>';
+    }).join('') + '</div>';
+  }
+  (d.students || []).forEach(function (s) {
+    var su = (d.users || []).filter(function (u) { return u.role === 'student' && u.studentId === s.id; })[0];
+    var pu = (d.users || []).filter(function (u) { return u.role === 'parent' && u.studentId === s.id; })[0];
+    html += '<div class="sheet-sec"><b>【' + UI.esc(s.name) + '（' + UI.esc(s.no) + '）】</b>';
+    if (su) html += '<div class="sheet-row">🎒 学生端：账号 <code>' + UI.esc(su.account) + '</code>　密码 <code>' + UI.esc(su.password) + '</code></div>';
+    if (pu) html += '<div class="sheet-row">👨‍👩‍👧 家长端：账号 <code>' + UI.esc(pu.account) + '</code>　密码 <code>' + UI.esc(pu.password) + '</code></div>';
+    html += '</div>';
+  });
+  return html;
+}
+function fallbackCopy(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); UI.toast('已复制全部账号密码', 'ok'); }
+  catch (e) { UI.toast('复制失败，请手动选择', 'err'); }
+  document.body.removeChild(ta);
+}
 Views.records = {
   title: '作业记录',
   render: function (ctx) {
@@ -173,9 +219,20 @@ Views.me = {
           return '<tr><td>' + UI.esc(x.name) + '</td>' +
             '<td><span class="badge ' + (x.role === 'teacher' ? 'info' : x.role === 'student' ? 'ok' : '') + '">' + Store.ROLE_TEXT[x.role] + '</span></td>' +
             '<td><code>' + UI.esc(x.account) + '</code></td>' +
-            '<td class="small muted">' + UI.esc(x.password) + '</td>' +
+            '<td class="small muted">••••••</td>' +
             '<td class="small">' + (s2 ? UI.esc(s2.name) + '（' + UI.esc(Store.className(s2.classId)) + '）' : '—') + '</td></tr>';
         }).join('') + '</tbody></table></div></div>' : '') +
+
+      (isTeacher ? '<div class="card section-gap"><div class="card-head"><h3>📋 账号密码清单（发给家长）</h3><div class="spacer"></div>' +
+        '<span class="hint">含真实密码，注意保密</span></div><div class="card-pad">' +
+        '<p class="small muted" style="margin-bottom:12px">下面列出每位学生的「学生端」与「家长端」登录账号和密码，可一键复制后发到家长群，或打印出来分发。账号格式：学生端=学号小写（如 a01），家长端=p+学号（如 pa01）。</p>' +
+        '<style>.acc-sheet .sheet-sec{margin-bottom:12px}.acc-sheet .sheet-sec>b{display:block;margin-bottom:4px;color:#5A4FCF;font-weight:700}.acc-sheet .sheet-row{font-size:14px;line-height:1.9}.acc-sheet code{background:#f0eefb;padding:1px 6px;border-radius:4px;font-family:monospace}</style>' +
+        '<div class="row wrap" style="gap:9px;margin-bottom:12px">' +
+          '<button class="btn sm" id="copySheet">📋 复制全部</button>' +
+          '<button class="btn ghost sm" id="printSheet">🖨️ 打印</button>' +
+        '</div>' +
+        '<div id="accSheet" class="acc-sheet">' + buildAccSheetHTML(d) + '</div>' +
+      '</div></div>' : '') +
 
       '<div class="card section-gap"><div class="card-head"><h3>使用说明</h3></div><div class="card-pad small" style="color:var(--text-2);line-height:1.9">' +
         '<p><b>教师</b>：在「作业批改」中查看每天提交的色彩 / 素描 / 速写作业，点选 A/B/C/D 评级并写评语，也可删除整条记录；在「作品集」或「学生管理」中可<b>代替学生交作业</b>，并在作品集里<b>逐张删除</b>错传或多余的作品图；在「学生管理」中添加学生（会自动生成学生和家长账号）；在「数据统计」中查看班级与个人完成情况，可导出 CSV。</p>' +
@@ -200,6 +257,30 @@ Views.me = {
     }
     var av = UI.el('#meAvatar'); if (av) av.onclick = changeAvatar;
     var ca = UI.el('#changeAvatar'); if (ca) ca.onclick = changeAvatar;
+
+    var copyBtn = UI.el('#copySheet');
+    if (copyBtn) copyBtn.onclick = function () {
+      var text = buildAccSheetText(Store.data());
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { UI.toast('已复制全部账号密码', 'ok'); }, function () { fallbackCopy(text); });
+      } else { fallbackCopy(text); }
+    };
+    var printBtn = UI.el('#printSheet');
+    if (printBtn) printBtn.onclick = function () {
+      var html = '<!doctype html><html><head><meta charset="utf-8"><title>账号密码清单</title>' +
+        '<style>body{font-family:-apple-system,Segoe UI,sans-serif;padding:24px;color:#222}' +
+        'h2{margin:0 0 4px}.sub{color:#888;margin:0 0 18px;font-size:13px}' +
+        '.sheet-sec{margin-bottom:14px}.sheet-sec>b{display:block;margin-bottom:4px;color:#5A4FCF;font-weight:700}' +
+        '.sheet-row{font-size:14px;line-height:1.9}code{background:#f0eefb;padding:1px 6px;border-radius:4px;font-family:monospace}' +
+        '@media print{body{padding:0}}</style></head><body>' +
+        '<h2>画室作业管家 · 账号密码清单</h2>' +
+        '<p class="sub">网址：' + location.origin + location.pathname + '</p>' +
+        buildAccSheetHTML(Store.data()) + '</body></html>';
+      var w = window.open('', '_blank');
+      if (!w) { UI.toast('打印窗口被拦截，请允许弹窗或用「复制全部」', 'err'); return; }
+      w.document.open(); w.document.write(html); w.document.close();
+      setTimeout(function () { w.focus(); w.print(); }, 300);
+    };
     var saveSubs = UI.el('#saveSubs');
     if (saveSubs) saveSubs.onclick = function () {
       var keys = [];
