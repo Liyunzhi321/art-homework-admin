@@ -197,7 +197,7 @@ var App = (function () {
         });
         Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
       }
-      setInterval(syncTick, 5000);
+      setInterval(syncTick, 3000);
       document.addEventListener('visibilitychange', function () { if (!document.hidden) syncTick(); });
       window.addEventListener('online', syncTick);
     }

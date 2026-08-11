@@ -219,7 +219,7 @@ Views.me = {
           return '<tr><td>' + UI.esc(x.name) + '</td>' +
             '<td><span class="badge ' + (x.role === 'teacher' ? 'info' : x.role === 'student' ? 'ok' : '') + '">' + Store.ROLE_TEXT[x.role] + '</span></td>' +
             '<td><code>' + UI.esc(x.account) + '</code></td>' +
-            '<td class="small muted">••••••</td>' +
+            '<td class="small"><code>' + UI.esc(x.password) + '</code></td>' +
             '<td class="small">' + (s2 ? UI.esc(s2.name) + '（' + UI.esc(Store.className(s2.classId)) + '）' : '—') + '</td></tr>';
         }).join('') + '</tbody></table></div></div>' : '') +
 

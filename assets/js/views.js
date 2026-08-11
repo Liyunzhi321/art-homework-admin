@@ -713,6 +713,14 @@ Views.submit = {
    不再依赖 Supabase Storage 的公开访问权限（旧版存 Storage URL，私密桶/未公开时图片加载失败）。
    r.thumb 为压缩后的缩略图 data URL，体积可控、展示足够清晰。 */
 function uploadHomeworkPhotos(sid, date, subj) {
+  function durlToBlob(dataURL) {
+    var parts = String(dataURL).split(',');
+    var mime = (parts[0].match(/:(.*?);/) || [, 'image/jpeg'])[1];
+    var bin = atob(parts[1]);
+    var arr = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
   var input = document.createElement('input');
   input.type = 'file'; input.accept = 'image/*'; input.multiple = true;
   return new Promise(function (resolve) {
@@ -720,9 +728,18 @@ function uploadHomeworkPhotos(sid, date, subj) {
       var files = Array.prototype.slice.call(input.files || []);
       if (!files.length) { resolve([]); return; }
       UI.toast('正在处理 ' + files.length + ' 张图片…');
-      Promise.all(files.map(function (f) {
+      // 优先上传到云端存储桶（拿到 URL），数据 JSON 不再内嵌大图，跨设备同步飞快；
+      // 若未连接云端或存储桶不可用，则回退为内联 data URL，绝不丢图。
+      var useStorage = !!(window.Cloud && Cloud.ready() && Cloud.uploadImage);
+      Promise.all(files.map(function (f, i) {
         return DB.compress(f, 1280, 0.82).then(function (r) {
-          return r.thumb; // 直接以内联 data URL 作为图片标识，跨设备稳定显示
+          if (useStorage) {
+            var path = 'hw/' + sid + '/' + date + '/' + subj + '/' + Date.now() + '_' + i + '.jpg';
+            return Cloud.uploadImage(durlToBlob(r.full), path)
+              .then(function (url) { return url; })
+              .catch(function () { return r.thumb; });
+          }
+          return r.thumb;
         });
       })).then(resolve).catch(function () { UI.toast('图片处理失败，请重试', 'err'); resolve([]); });
     };
