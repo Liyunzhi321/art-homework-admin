@@ -206,22 +206,47 @@ var Store = (function () {
     cloudTimer = setTimeout(function () {
       cloudTimer = null;
       if (!state || !state.users) return;
-      var ts = new Date().toISOString();
-      // 推送前先拉取云端最新，并与本地双向合并（墓碑并集 + 逐项 LWW），
-      // 确保本端删除（墓碑）不会因推送旧副本而复活，也不会覆盖别人的新改动。
-      Cloud.load().then(function (res) {
-        if (res && res.payload && res.payload.users) {
-          var rec = reconcile(res.payload, state);
-          state = rec;
-          try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
-        }
-        return Cloud.save(state, ts).then(function () { lastCloudAt = ts; });
-      }).catch(function () {
-        // 拉取失败：不盲目用本地覆盖云端，避免把他人已删除的数据又推回去（删除复活 bug）
-        return Promise.resolve(false);
-      });
+      pushWithRetry(3);
     }, 600);
   }
+
+  // 乐观并发写入：先拉云端最新并合并，再用「版本号条件更新」写回；
+  // 若写入期间别人已改动云端（版本号不匹配），判定冲突后重拉、重合并、重试，
+  // 直到成功或次数耗尽。彻底消除「跨设备 / 多标签页同时编辑 → 整行覆盖 → 数据丢失」。
+  function pushWithRetry(tries) {
+    if (tries <= 0) return Promise.resolve(false);
+    if (!window.Cloud || !Cloud.ready()) return Promise.resolve(false);
+    var expected = (typeof (state && state.version) === 'number') ? state.version : 0;
+    var haveCloud = false;
+    return Cloud.load().then(function (res) {
+      if (res && res.payload && res.payload.users) {
+        state = reconcile(res.payload, state);
+        if (typeof res.payload.version === 'number') expected = res.payload.version;
+        haveCloud = true;
+      }
+      var ts = new Date().toISOString();
+      var payload = JSON.parse(JSON.stringify(state));
+      if (typeof payload.version !== 'number') payload.version = expected;
+      // 仅当确实读到过云端行时才做版本条件更新；云端为空的初始化场景走无条件写入(insert)
+      var expArg = haveCloud ? expected : undefined;
+      return Cloud.save(payload, ts, expArg).then(function (info) {
+        if (info.conflict) {
+          // 云端在我们读取后被别人改写，重拉重合并重试
+          return pushWithRetry(tries - 1);
+        }
+        if (info.ok) {
+          state.version = (typeof info.version === 'number') ? info.version : expected + 1;
+          lastCloudAt = ts;
+          try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+          return true;
+        }
+        return false;
+      });
+    }).catch(function () { return false; });
+  }
+
+  // 立即推送（供「立即同步」按钮等主动触发，带乐观并发保护）
+  function pushNow() { return pushWithRetry(3); }
   function load() {
     try {
       var raw = localStorage.getItem(KEY);
@@ -436,11 +461,11 @@ var Store = (function () {
         lastCloudAt = res.updated_at; // 记录已同步的云端时间戳，供轻量轮询判断是否变化
         return { ok: true, action: 'pull', at: res.updated_at };
       }
-      // 云端为空：本机若有真实数据则作为共享基线恢复上去；否则不盲目用空壳覆盖云端
+      // 云端为空：本机若有真实数据则作为共享基线恢复上去（带乐观并发，避免覆盖他人刚写入的数据）
       if (hasRealData()) {
-        return Cloud.save(data(), new Date().toISOString()).then(function () {
-          return { ok: true, action: 'push', at: new Date().toISOString() };
-        }).catch(function () { return { ok: false, action: 'push-fail' }; });
+        return pushWithRetry(3).then(function (ok) {
+          return ok ? { ok: true, action: 'push', at: new Date().toISOString() } : { ok: false, action: 'push-fail' };
+        });
       }
       return null;
     }).catch(function () { return null; });
@@ -1375,7 +1400,7 @@ var Store = (function () {
   return {
     SUBJECTS: SUBJECTS, GRADES: GRADES, GRADE_TEXT: GRADE_TEXT, GRADE_COLOR: GRADE_COLOR, ROLE_TEXT: ROLE_TEXT,
     CULTURE_SUBJECTS: CULTURE_SUBJECTS, SHIFTS: SHIFTS, shift: shift, PERIODS: PERIODS,
-    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, poll: poll, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
+    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, poll: poll, pushNow: pushNow, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
     login: login, logout: logout, currentUser: currentUser, changePassword: changePassword, needsPasswordChange: needsPasswordChange,
     getStudent: getStudent, getClass: getClass, className: className, allStudents: allStudents,
     studentUsers: studentUsers, subject: subject, studentSubjects: studentSubjects, setStudentSubjects: setStudentSubjects,

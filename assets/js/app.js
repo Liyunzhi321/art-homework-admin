@@ -186,15 +186,9 @@ var App = (function () {
     render();
     // 云端同步：首次拉取 + 定时/切回前台时刷新，保证多设备共享同一份数据
     if (window.Cloud && Cloud.ready()) {
-      Cloud.load().then(function (res) {
-        if (res && res.payload && res.payload.users) {
-          Store.merge(res.payload); render();
-          Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
-        } else if (Store.hasRealData && Store.hasRealData()) {
-          // 云端为空但本机有真实数据 → 作为共享基线推上去（恢复）
-          Cloud.save(Store.data(), new Date().toISOString());
-        }
-        // 云端空且本机也无真实数据：保持云端为空，等待有数据的设备恢复，避免用空壳覆盖
+      Store.syncFromCloud().then(function () {
+        render();
+        Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
       });
       function syncTick() {
         Store.poll().then(function (changed) {

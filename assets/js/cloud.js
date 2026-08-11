@@ -91,25 +91,42 @@ var Cloud = (function () {
   }
 
   // 写入云端（先 PATCH，若行不存在则 POST 插入）
-  function save(payload, updatedAt) {
-    if (!ready()) return Promise.resolve(false);
+  // 乐观并发控制：传入 expectedVersion 时，仅在「云端版本号 == expectedVersion」时才允许覆盖，
+  // 否则视为并发冲突（他人在我们读取后已改写云端），返回 { ok:false, conflict:true } 供上层重试。
+  // 返回值：{ ok, conflict, version } —— version 为本次写入成功后的新版本号。
+  function save(payload, updatedAt, expectedVersion) {
+    if (!ready()) return Promise.resolve({ ok: false, conflict: false, version: null });
     var ts = updatedAt || new Date().toISOString();
-    var patch = fetch(rest() + '?id=eq.' + ROW_ID, {
+    var payloadCopy = JSON.parse(JSON.stringify(payload || {}));
+    var base = (typeof payloadCopy.version === 'number') ? payloadCopy.version
+             : ((typeof expectedVersion === 'number') ? expectedVersion : 0);
+    var newVersion = base + 1;
+    payloadCopy.version = newVersion;
+    var url = rest() + '?id=eq.' + ROW_ID;
+    if (typeof expectedVersion === 'number') url += '&payload->>version=eq.' + expectedVersion;
+    var patch = fetch(url, {
       method: 'PATCH',
-      headers: apiHeaders(),
-      body: JSON.stringify({ payload: payload, updated_at: ts })
+      headers: Object.assign(apiHeaders(), { 'Prefer': 'return=minimal, count=exact' }),
+      body: JSON.stringify({ payload: payloadCopy, updated_at: ts })
     });
     return patch.then(function (r) {
       if (r.status === 404 || r.status === 406) {
         return fetch(rest(), {
           method: 'POST',
           headers: apiHeaders(),
-          body: JSON.stringify({ id: ROW_ID, payload: payload, updated_at: ts })
-        }).then(function (pr) { if (pr.ok) markSync(); return true; });
+          body: JSON.stringify({ id: ROW_ID, payload: payloadCopy, updated_at: ts })
+        }).then(function (pr) { if (pr.ok) markSync(); return { ok: pr.ok, conflict: false, version: newVersion }; });
       }
-      if (r.ok) markSync();
-      return r.ok;
-    }).catch(function () { return false; });
+      // 通过 Content-Range 的 count 判断是否真的更新到了行（冲突时为 0）
+      var total = null;
+      try {
+        var cr = r.headers.get('Content-Range');
+        if (cr && cr.indexOf('/') >= 0) total = parseInt(cr.split('/')[1], 10);
+      } catch (e) {}
+      var ok = (total === null) ? r.ok : (total > 0);
+      if (ok) markSync();
+      return { ok: ok, conflict: !ok && r.ok, version: newVersion };
+    }).catch(function () { return { ok: false, conflict: false, version: newVersion }; });
   }
 
   // 测试连接：尝试 SELECT 一行，返回 { ok, msg }

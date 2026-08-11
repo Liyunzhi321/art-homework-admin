@@ -390,7 +390,7 @@ Views.me = {
           if (r && r.ok) {
             UI.toast(r.action === 'push' ? '已启用，并用本机数据恢复云端' : '已启用，已拉取共享数据', 'ok');
           } else if (Store.hasRealData && Store.hasRealData()) {
-            Cloud.save(Store.data(), new Date().toISOString());
+            Store.pushNow();
             UI.toast('已启用，并用本机数据恢复云端', 'ok');
           } else {
             UI.toast('已启用（云端暂无数据，本机也无同步数据）', 'err');
@@ -413,7 +413,7 @@ Views.me = {
             if (r.action === 'push') UI.toast('云端为空，已用本机数据恢复云端', 'ok');
             else UI.toast('已同步云端最新数据', 'ok');
           } else if (Store.hasRealData && Store.hasRealData()) {
-            Cloud.save(Store.data(), new Date().toISOString());
+            Store.pushNow();
             UI.toast('云端为空，已用本机数据恢复云端', 'ok');
           } else {
             UI.toast('云端暂无数据', 'err');
