@@ -470,6 +470,38 @@ var Store = (function () {
       return null;
     }).catch(function () { return null; });
   }
+  // 启动引导：云端优先，杜绝「新域名 / 新设备首次打开 → 先种带当天时间戳的演示数据
+  // → 与云端按 LWW 合并时覆盖真实数据」的隐患。
+  //   - 本地已有真实数据：保持原合并同步逻辑（不种演示）。
+  //   - 本地为空：直接从云端拉真实数据水合；仅当云端与本地都为空时才种演示。
+  function bootstrap() {
+    return Promise.resolve().then(function () {
+      var localHas = false;
+      try {
+        var raw = localStorage.getItem(KEY);
+        if (raw) { var d = JSON.parse(raw); localHas = !!(d && d.users && d.users.length); }
+      } catch (e) {}
+      if (localHas) {
+        load(); // 确保 state 已加载
+        return Promise.resolve(syncFromCloud()).then(function () { return 'local'; });
+      }
+      if (window.Cloud && Cloud.ready()) {
+        return Cloud.load().then(function (res) {
+          if (res && res.payload && res.payload.users) {
+            hydrate(res.payload); // 云端真实数据直接覆盖本地（含演示剥离）
+            stripDemoHomework(state); stripDemoAttendance(state);
+            try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+            lastCloudAt = res.updated_at;
+            return 'cloud';
+          }
+          state = seed(); persistLocal(); return 'seed';
+        }).catch(function () {
+          state = seed(); persistLocal(); return 'seed';
+        });
+      }
+      state = seed(); persistLocal(); return 'seed';
+    });
+  }
   // 轻量轮询：先只取云端 updated_at，没变化就跳过（省流量）；变了才拉完整数据并合并。
   // 返回 Promise<boolean>：本次是否真正拉取并合并了新数据。
   function poll() {
@@ -1400,7 +1432,7 @@ var Store = (function () {
   return {
     SUBJECTS: SUBJECTS, GRADES: GRADES, GRADE_TEXT: GRADE_TEXT, GRADE_COLOR: GRADE_COLOR, ROLE_TEXT: ROLE_TEXT,
     CULTURE_SUBJECTS: CULTURE_SUBJECTS, SHIFTS: SHIFTS, shift: shift, PERIODS: PERIODS,
-    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, poll: poll, pushNow: pushNow, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
+    load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, bootstrap: bootstrap, poll: poll, pushNow: pushNow, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
     login: login, logout: logout, currentUser: currentUser, changePassword: changePassword, needsPasswordChange: needsPasswordChange,
     getStudent: getStudent, getClass: getClass, className: className, allStudents: allStudents,
     studentUsers: studentUsers, subject: subject, studentSubjects: studentSubjects, setStudentSubjects: setStudentSubjects,

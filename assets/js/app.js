@@ -177,19 +177,26 @@ var App = (function () {
   /* ---------- 启动 ---------- */
   function boot() {
     if (window.Cloud) Cloud.init();
-    Store.load();
-    Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
-    if (!location.hash) location.hash = Store.currentUser() ? '#/home' : '#/login';
     window.addEventListener('hashchange', function () {
       try { render(); } catch (e) { console.error('render error:', e); }
     });
-    render();
-    // 云端同步：首次拉取 + 定时/切回前台时刷新，保证多设备共享同一份数据
+    document.addEventListener('click', function (e) {
+      var t = e.target.closest && e.target.closest('#sideLogout');
+      if (t) {
+        UI.confirm('退出登录', '确定要退出当前账号吗？', function () {
+          Store.logout(); location.hash = '#/login'; render();
+        });
+      }
+    });
+    // 启动引导（云端优先）：新域名/新设备直接从云端恢复真实数据，不先种演示；
+    // 本地已有数据则保持原合并同步逻辑。彻底避免演示数据按时间戳覆盖真实数据。
+    Store.bootstrap().then(function () {
+      if (!location.hash) location.hash = Store.currentUser() ? '#/home' : '#/login';
+      render();
+      Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
+    }).catch(function () { try { render(); } catch (e) {} });
+    // 云端定时/切回前台刷新，保证多设备共享同一份数据
     if (window.Cloud && Cloud.ready()) {
-      Store.syncFromCloud().then(function () {
-        render();
-        Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
-      });
       function syncTick() {
         Store.poll().then(function (changed) {
           var modalOpen = document.getElementById('modal-root') && document.getElementById('modal-root').children.length;
@@ -201,14 +208,6 @@ var App = (function () {
       document.addEventListener('visibilitychange', function () { if (!document.hidden) syncTick(); });
       window.addEventListener('online', syncTick);
     }
-    document.addEventListener('click', function (e) {
-      var t = e.target.closest && e.target.closest('#sideLogout');
-      if (t) {
-        UI.confirm('退出登录', '确定要退出当前账号吗？', function () {
-          Store.logout(); location.hash = '#/login'; render();
-        });
-      }
-    });
   }
 
   return { boot: boot, render: render, query: query, setQuery: setQuery, go: go };
