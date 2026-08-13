@@ -200,6 +200,8 @@ var Store = (function () {
   /* ---------------- 持久化 ---------------- */
   var cloudTimer = null;
   var lastCloudAt = null; // 最近一次已知云端 updated_at；用于轻量轮询判断"是否有变化"
+  var dirtySinceSync = false; // 本地自上次成功推送以来是否有未同步的改动（闲时/关闭前强推与防 ping-pong 用）
+  var LAST_FULL_SYNC_KEY = 'ahm_last_full_sync'; // 最近一次"全量对账"时间戳（用于检测整夜关闭后的补偿同步）
   function scheduleCloud() {
     if (!window.Cloud || !Cloud.ready()) return;
     if (cloudTimer) clearTimeout(cloudTimer);
@@ -237,6 +239,7 @@ var Store = (function () {
         if (info.ok) {
           state.version = (typeof info.version === 'number') ? info.version : expected + 1;
           lastCloudAt = ts;
+          dirtySinceSync = false; // 推送成功 → 本地无待同步改动
           try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
           return true;
         }
@@ -262,6 +265,7 @@ var Store = (function () {
     return state;
   }
   function save() {
+    dirtySinceSync = true; // 本地产生改动，标记待同步（供闲时/关闭前强推与防 ping-pong）
     try { localStorage.setItem(KEY, JSON.stringify(state)); }
     catch (e) { console.warn('保存失败', e); }
     scheduleCloud();
@@ -470,36 +474,54 @@ var Store = (function () {
       return null;
     }).catch(function () { return null; });
   }
-  // 启动引导：云端优先，杜绝「新域名 / 新设备首次打开 → 先种带当天时间戳的演示数据
-  // → 与云端按 LWW 合并时覆盖真实数据」的隐患。
-  //   - 本地已有真实数据：保持原合并同步逻辑（不种演示）。
-  //   - 本地为空：直接从云端拉真实数据水合；仅当云端与本地都为空时才种演示。
+  // 启动引导：云端优先。新域名/新设备打开时，本地可能残留「演示占位数据」（作业/考勤为空），
+  // 必须以云端真实数据为基准，仅把本地「云端没有且非演示」的条目补回，杜绝演示占位覆盖真实数据。
   function bootstrap() {
     return Promise.resolve().then(function () {
-      var localHas = false;
+      var localRaw = null, localData = null, localHas = false;
       try {
-        var raw = localStorage.getItem(KEY);
-        if (raw) { var d = JSON.parse(raw); localHas = !!(d && d.users && d.users.length); }
+        localRaw = localStorage.getItem(KEY);
+        if (localRaw) { localData = JSON.parse(localRaw); localHas = !!(localData && localData.users && localData.users.length); }
       } catch (e) {}
-      if (localHas) {
-        load(); // 确保 state 已加载
-        return Promise.resolve(syncFromCloud()).then(function () { return 'local'; });
-      }
       if (window.Cloud && Cloud.ready()) {
         return Cloud.load().then(function (res) {
           if (res && res.payload && res.payload.users) {
-            hydrate(res.payload); // 云端真实数据直接覆盖本地（含演示剥离）
+            // 始终以云端真实数据为基准；仅补回本地独有且非演示的条目（防止本地缓存的空演示覆盖真实数据）
+            hydrate(res.payload);
+            lastCloudAt = res.updated_at;
+            if (localData && localData.users) mergeLocalOnly(localData);
             stripDemoHomework(state); stripDemoAttendance(state);
             try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
-            lastCloudAt = res.updated_at;
             return 'cloud';
           }
+          if (localHas) { load(); return 'local'; }
           state = seed(); persistLocal(); return 'seed';
         }).catch(function () {
+          // 读取云端失败：保留本地数据，不推送，避免用本地覆盖云端
+          if (localHas) { load(); return 'local'; }
           state = seed(); persistLocal(); return 'seed';
         });
       }
+      if (localHas) { load(); return 'local'; }
       state = seed(); persistLocal(); return 'seed';
+    });
+  }
+  // 仅把本地「云端没有、且非演示」的条目补回到 state；云端已有(按 id)的以云端为准，演示/已删除的不回写。
+  function mergeLocalOnly(local) {
+    if (!local || !local.users) return;
+    var cats = ['users', 'students', 'records', 'assignments', 'attendance', 'cultureScores', 'profGrades'];
+    cats.forEach(function (cat) {
+      var cloudIds = {};
+      (state[cat] || []).forEach(function (x) { if (x && x.id) cloudIds[x.id] = 1; });
+      var tomb = (local.tomb && local.tomb[cat]) || {};
+      (local[cat] || []).forEach(function (x) {
+        if (!x || !x.id) return;
+        if (x.demo) return;
+        if (cloudIds[x.id]) return;
+        if (tomb[x.id]) return;
+        if (!state[cat]) state[cat] = [];
+        state[cat].push(x);
+      });
     });
   }
   // 轻量轮询：先只取云端 updated_at，没变化就跳过（省流量）；变了才拉完整数据并合并。
@@ -512,6 +534,40 @@ var Store = (function () {
       lastCloudAt = at;
       return syncFromCloud().then(function (r) { return !!r; });
     }).catch(function () { return false; });
+  }
+  // 最近一次全量对账时间（供"整夜关闭后补偿同步"判断）
+  function getLastFullSync() {
+    try { var v = localStorage.getItem(LAST_FULL_SYNC_KEY); return v ? parseInt(v, 10) : 0; } catch (e) { return 0; }
+  }
+  function setLastFullSync(t) {
+    try { localStorage.setItem(LAST_FULL_SYNC_KEY, (t || Date.now()).toString()); } catch (e) {}
+  }
+  // 全量对账（闲时/凌晨/打开补偿用）：以云端为基准做双向 reconcile，
+  // 再把合并结果写回云端(乐观并发)，把本地未同步的改动一并补上传；
+  // 同时拉回云端在此期间变化的真实数据。弥补"频繁使用期间因同步慢而漏掉的数据"。
+  // 防 ping-pong：云端无变化且无本地待推改动时直接跳过，避免多设备空闲时互相刷版本。
+  function deepSync() {
+    if (!window.Cloud || !Cloud.ready()) return Promise.resolve(false);
+    if (!state || !state.users) return Promise.resolve(false);
+    return Cloud.loadMeta().then(function (at) {
+      if (at && at === lastCloudAt && !dirtySinceSync) return false; // 无变化且无本地待推 → 跳过
+      return pushWithRetry(3).then(function (ok) {
+        if (ok) setLastFullSync(Date.now());
+        return ok;
+      });
+    }).catch(function () { return false; });
+  }
+  // 切后台/关闭页面前的强推：把本地尚未推送的改动立即写回云端，避免关闭导致改动丢失或滞后。
+  function flush() {
+    if (!dirtySinceSync) return Promise.resolve(false); // 没有待推改动就不打扰云端
+    return pushWithRetry(3).then(function (ok) { if (ok) setLastFullSync(Date.now()); return ok; });
+  }
+  // 打开/切回前台时的全量拉取：无条件从云端完整拉回并合并（不像 poll 那样被 meta 跳过），
+  // 保证"打开即最新"，并补回本机 IndexedDB 残留图片。
+  function fullPull() {
+    return syncFromCloud().then(function (r) {
+      return migrateInlineImages().then(function (n) { return { r: r, n: n }; });
+    });
   }
   function data() { return state || load(); }
 
@@ -1433,6 +1489,7 @@ var Store = (function () {
     SUBJECTS: SUBJECTS, GRADES: GRADES, GRADE_TEXT: GRADE_TEXT, GRADE_COLOR: GRADE_COLOR, ROLE_TEXT: ROLE_TEXT,
     CULTURE_SUBJECTS: CULTURE_SUBJECTS, SHIFTS: SHIFTS, shift: shift, PERIODS: PERIODS,
     load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, bootstrap: bootstrap, poll: poll, pushNow: pushNow, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
+    deepSync: deepSync, flush: flush, fullPull: fullPull, getLastFullSync: getLastFullSync,
     login: login, logout: logout, currentUser: currentUser, changePassword: changePassword, needsPasswordChange: needsPasswordChange,
     getStudent: getStudent, getClass: getClass, className: className, allStudents: allStudents,
     studentUsers: studentUsers, subject: subject, studentSubjects: studentSubjects, setStudentSubjects: setStudentSubjects,

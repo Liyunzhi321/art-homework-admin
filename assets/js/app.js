@@ -194,19 +194,49 @@ var App = (function () {
       if (!location.hash) location.hash = Store.currentUser() ? '#/home' : '#/login';
       render();
       Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
+      // 若距上次全量对账已超过 12 小时（整夜关闭 / 长时间未开），启动后立刻做一次补偿同步，
+      // 弥补离线期间漏掉的数据。
+      if (Date.now() - Store.getLastFullSync() > 12 * 60 * 60 * 1000) {
+        Store.deepSync().then(function (ok) { if (ok) render(); });
+      }
     }).catch(function () { try { render(); } catch (e) {} });
     // 云端定时/切回前台刷新，保证多设备共享同一份数据
     if (window.Cloud && Cloud.ready()) {
+      function safeRender() {
+        var modalOpen = document.getElementById('modal-root') && document.getElementById('modal-root').children.length;
+        if (!modalOpen) render();
+      }
       function syncTick() {
         Store.poll().then(function (changed) {
-          var modalOpen = document.getElementById('modal-root') && document.getElementById('modal-root').children.length;
-          if (changed && !modalOpen) render();
+          if (changed) safeRender();
         });
-        Store.migrateInlineImages().then(function (n) { if (n > 0) render(); });
+        Store.migrateInlineImages().then(function (n) { if (n > 0) safeRender(); });
       }
-      setInterval(syncTick, 3000);
-      document.addEventListener('visibilitychange', function () { if (!document.hidden) syncTick(); });
+      // D：轮询由 3s 提速至 1.5s，更快发现并拉取云端变更
+      setInterval(syncTick, 1500);
+      // 用户活动埋点：判断"是否空闲 / 无人使用"
+      var lastActivity = Date.now();
+      function markActivity() { lastActivity = Date.now(); }
+      ['click', 'keydown', 'pointerdown', 'touchstart'].forEach(function (ev) {
+        document.addEventListener(ev, markActivity, { passive: true });
+      });
+      // A：切到后台或关闭页面前，立即把本地改动强推到云端（避免滞后 / 丢失）
+      function onHide() { Store.flush(); }
+      window.addEventListener('pagehide', onHide);
+      // C：切回前台 / 打开时，无条件全量拉取一次，保证"打开即最新"
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { onHide(); }
+        else { Store.fullPull().then(function (res) { if (res && res.r) safeRender(); }); }
+      });
       window.addEventListener('online', syncTick);
+      // B：闲时(无人使用 / 凌晨)全量对账。空闲 3 分钟或页面在后台时，每 1 分钟检查一次，
+      // 做一次完整的双向 reconcile 弥补白天因同步慢漏掉的数据；用 dirtySinceSync 与 meta 防 ping-pong。
+      setInterval(function () {
+        var idle = (Date.now() - lastActivity) > 3 * 60 * 1000;
+        if (idle || document.hidden) {
+          Store.deepSync().then(function (ok) { if (ok) safeRender(); });
+        }
+      }, 60 * 1000);
     }
   }
 
