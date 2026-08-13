@@ -375,6 +375,9 @@ var Store = (function () {
             if (loser[f] !== undefined && pt(loser) >= pt(winner)) u[f] = loser[f];
           });
           if (u.password === DEFAULT_PWD && loser.password && loser.password !== DEFAULT_PWD) u.password = loser.password;
+          // 登录轨迹保护：lastLoginAt 取较新、loginCount 取较大，避免被「未登录过的旧副本」(deepSync/flush 推送时带入空值)覆盖而丢失家长登录记录
+          u.lastLoginAt = Math.max((c && c.lastLoginAt) || 0, (l && l.lastLoginAt) || 0) || (u.lastLoginAt || 0);
+          u.loginCount = Math.max((c && c.loginCount) || 0, (l && l.loginCount) || 0) || (u.loginCount || 0);
           out[cat].push(u);
           return;
         }
@@ -551,9 +554,12 @@ var Store = (function () {
     if (!state || !state.users) return Promise.resolve(false);
     return Cloud.loadMeta().then(function (at) {
       if (at && at === lastCloudAt && !dirtySinceSync) return false; // 无变化且无本地待推 → 跳过
-      return pushWithRetry(3).then(function (ok) {
-        if (ok) setLastFullSync(Date.now());
-        return ok;
+      // 先拉云端最新并合并(含他人登录轨迹/最新业务)，再推送本地改动，避免用陈旧本地副本覆盖云端已记录的登录信息
+      return syncFromCloud().then(function () {
+        return pushWithRetry(3).then(function (ok) {
+          if (ok) setLastFullSync(Date.now());
+          return ok;
+        });
       });
     }).catch(function () { return false; });
   }
