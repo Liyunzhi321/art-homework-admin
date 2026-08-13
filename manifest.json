@@ -1,6 +1,6 @@
 {
-  "name": "画室作业管家 · 美术班作业管理系统",
-  "short_name": "作业管家",
+  "name": "学生考学数据系统 · 美术考学数据管理",
+  "short_name": "考学系统",
   "description": "色彩 / 素描 / 速写每日作业收集、评级与学生作品集",
   "start_url": "./index.html",
   "display": "standalone",

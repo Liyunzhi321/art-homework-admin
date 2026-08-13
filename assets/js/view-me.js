@@ -6,7 +6,7 @@ var SB_STORAGE_SQL = "insert into storage.buckets (id, name, public) values ('ar
 /* 账号密码清单：构造可复制/打印的文本与 HTML（含真实密码，仅教师可见） */
 function buildAccSheetText(d) {
   var lines = [];
-  lines.push('画室作业管家 · 账号密码清单');
+  lines.push('学生考学数据系统 · 账号密码清单');
   lines.push('网址：' + location.origin + location.pathname);
   lines.push('');
   (d.users || []).filter(function (u) { return u.role === 'teacher'; }).forEach(function (u) {
@@ -273,7 +273,7 @@ Views.me = {
         '.sheet-sec{margin-bottom:14px}.sheet-sec>b{display:block;margin-bottom:4px;color:#5A4FCF;font-weight:700}' +
         '.sheet-row{font-size:14px;line-height:1.9}code{background:#f0eefb;padding:1px 6px;border-radius:4px;font-family:monospace}' +
         '@media print{body{padding:0}}</style></head><body>' +
-        '<h2>画室作业管家 · 账号密码清单</h2>' +
+        '<h2>学生考学数据系统 · 账号密码清单</h2>' +
         '<p class="sub">网址：' + location.origin + location.pathname + '</p>' +
         buildAccSheetHTML(Store.data()) + '</body></html>';
       var w = window.open('', '_blank');

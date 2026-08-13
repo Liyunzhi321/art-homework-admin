@@ -53,7 +53,7 @@ Views.login = {
     return '' +
       '<div class="login-page">' +
         '<div class="login-art">' +
-          '<div class="login-brand"><div class="mark">🎨</div><span>画室作业管家</span></div>' +
+          '<div class="login-brand"><div class="mark">🎨</div><span>学生考学数据系统</span></div>' +
           '<div class="login-hero">' +
             '<h1>每天的色彩、素描、速写<br>都值得被认真记录</h1>' +
             '<p>教师收作业与评级、学生打卡上传、家长随时查看成长轨迹。三端同一个链接，手机电脑都能用。</p>' +
