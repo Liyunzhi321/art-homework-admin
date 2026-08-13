@@ -587,6 +587,11 @@ var Store = (function () {
     if (!u) return { ok: false, msg: '该账号不存在，请检查账号或切换角色标签后重试' };
     if (u.password !== password) return { ok: false, msg: '密码不正确' };
     localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: u.id, at: Date.now() }));
+    // 记录登录轨迹：最近登录时间 + 登录次数（供教师后台「全部账号一览」查看谁登录过）
+    u.lastLoginAt = Date.now();
+    u.loginCount = (u.loginCount || 0) + 1;
+    u.updatedAt = new Date().toISOString(); // 更新时间戳，确保登录轨迹在云端合并(LWW)时不被旧副本覆盖
+    save();
     return { ok: true, user: u };
   }
   function logout() { localStorage.removeItem(SESSION_KEY); }

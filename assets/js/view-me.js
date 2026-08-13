@@ -213,14 +213,19 @@ Views.me = {
 
       (isTeacher ? '<div class="card section-gap"><div class="card-head"><h3>全部账号一览</h3><div class="spacer"></div>' +
         '<span class="hint">可发给学生和家长</span></div><div class="table-wrap"><table class="tbl">' +
-        '<thead><tr><th>姓名</th><th>身份</th><th>登录账号</th><th>密码</th><th>关联学生</th></tr></thead><tbody>' +
-        d.users.map(function (x) {
+        '<thead><tr><th>姓名</th><th>身份</th><th>登录账号</th><th>密码</th><th>关联学生</th><th>改密</th><th>最近登录</th><th>登录次数</th></tr></thead><tbody>' +
+        d.users.slice().sort(function (a, b) { return (b.lastLoginAt || 0) - (a.lastLoginAt || 0); }).map(function (x) {
           var s2 = x.studentId ? Store.getStudent(x.studentId) : null;
+          var lastStr = x.lastLoginAt ? UI.fmtTime(x.lastLoginAt) : '未登录';
+          var online = x.lastLoginAt && (Date.now() - x.lastLoginAt) < 10 * 60 * 1000;
           return '<tr><td>' + UI.esc(x.name) + '</td>' +
             '<td><span class="badge ' + (x.role === 'teacher' ? 'info' : x.role === 'student' ? 'ok' : '') + '">' + Store.ROLE_TEXT[x.role] + '</span></td>' +
             '<td><code>' + UI.esc(x.account) + '</code></td>' +
             '<td class="small"><code>' + UI.esc(x.password) + '</code></td>' +
-            '<td class="small">' + (s2 ? UI.esc(s2.name) + '（' + UI.esc(Store.className(s2.classId)) + '）' : '—') + '</td></tr>';
+            '<td class="small">' + (s2 ? UI.esc(s2.name) + '（' + UI.esc(Store.className(s2.classId)) + '）' : '—') + '</td>' +
+            '<td>' + (x.pwdSet ? '<span class="badge ok">已改密</span>' : '<span class="badge warn">未改密</span>') + '</td>' +
+            '<td class="small">' + (online ? '<span class="badge ok">🟢在线</span> ' : '') + lastStr + '</td>' +
+            '<td class="small">' + (x.loginCount || 0) + '</td></tr>';
         }).join('') + '</tbody></table></div></div>' : '') +
 
       (isTeacher ? '<div class="card section-gap"><div class="card-head"><h3>📋 账号密码清单（发给家长）</h3><div class="spacer"></div>' +
