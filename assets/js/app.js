@@ -144,7 +144,7 @@ var App = (function () {
     var st = user.studentId ? Store.getStudent(user.studentId) : null;
     return '<aside class="sidebar">' +
       '<div class="side-brand"><div class="mark">🎨</div>' +
-        '<div class="txt"><b>学生考学数据系统</b><span>美术考学数据管理</span></div></div>' +
+        '<div class="txt"><b>清大美术班学生考学数据系统</b><span>美术考学数据管理</span></div></div>' +
       '<nav class="side-nav">' +
         '<div class="group-title">' + Store.ROLE_TEXT[user.role] + '功能</div>' +
         nav.map(function (n) {
