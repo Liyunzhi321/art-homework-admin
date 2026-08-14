@@ -201,14 +201,44 @@ var Store = (function () {
   var cloudTimer = null;
   var lastCloudAt = null; // 最近一次已知云端 updated_at；用于轻量轮询判断"是否有变化"
   var dirtySinceSync = false; // 本地自上次成功推送以来是否有未同步的改动（闲时/关闭前强推与防 ping-pong 用）
+  var DIRTY_KEY = 'ahm_dirty'; // 未同步改动标记（持久化，重启后仍可补推，杜绝"重启后本地脏数据不再重试"）
   var LAST_FULL_SYNC_KEY = 'ahm_last_full_sync'; // 最近一次"全量对账"时间戳（用于检测整夜关闭后的补偿同步）
+  // 同步状态机：让 UI 能显示"是否成功上云"，杜绝"本地成功但云端没推上去"的静默失败
+  var syncState = 'idle'; // idle=已同步 syncing=同步中 dirty=有改动待推 error=上次推送失败正在重试
+  var syncListeners = [];
+  var retryTimer = null;
+  var retryDelay = 15000;
+  function setSync(s) {
+    syncState = s;
+    syncListeners.forEach(function (f) { try { f(s); } catch (e) {} });
+  }
+  function onSync(cb) { if (typeof cb === 'function') syncListeners.push(cb); }
+  function getSyncState() { return syncState; }
+  // 持续重试：推送失败不丢弃，按指数退避（15s→5min）反复重试，直到云端确认收到
+  function scheduleRetry() {
+    if (retryTimer) return;
+    if (!dirtySinceSync) return;
+    retryTimer = setTimeout(function () {
+      retryTimer = null;
+      if (!dirtySinceSync) return;
+      setSync('syncing');
+      pushWithRetry(3).then(function (ok) {
+        if (ok) { retryDelay = 15000; setSync('idle'); }
+        else { retryDelay = Math.min(retryDelay * 2, 5 * 60 * 1000); scheduleRetry(); }
+      });
+    }, retryDelay);
+  }
   function scheduleCloud() {
-    if (!window.Cloud || !Cloud.ready()) return;
+    // 不再因云端暂时未就绪而放弃：安排一次立即尝试 + 后续持续重试，保证最终上云
     if (cloudTimer) clearTimeout(cloudTimer);
     cloudTimer = setTimeout(function () {
       cloudTimer = null;
       if (!state || !state.users) return;
-      pushWithRetry(3);
+      setSync('syncing');
+      pushWithRetry(3).then(function (ok) {
+        if (ok) { retryDelay = 15000; setSync(dirtySinceSync ? 'dirty' : 'idle'); }
+        else { if (dirtySinceSync) { setSync('error'); scheduleRetry(); } else { setSync('idle'); } }
+      });
     }, 600);
   }
 
@@ -240,7 +270,8 @@ var Store = (function () {
           state.version = (typeof info.version === 'number') ? info.version : expected + 1;
           lastCloudAt = ts;
           dirtySinceSync = false; // 推送成功 → 本地无待同步改动
-          try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+          try { localStorage.removeItem(DIRTY_KEY); localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+          setSync('idle');
           return true;
         }
         return false;
@@ -249,7 +280,7 @@ var Store = (function () {
   }
 
   // 立即推送（供「立即同步」按钮等主动触发，带乐观并发保护）
-  function pushNow() { return pushWithRetry(3); }
+  function pushNow() { return pushWithRetry(3).then(function (ok) { if (!ok) { if (dirtySinceSync) { setSync('error'); scheduleRetry(); } else setSync('idle'); } return ok; }); }
   function load() {
     try {
       var raw = localStorage.getItem(KEY);
@@ -262,11 +293,14 @@ var Store = (function () {
       state.attendance.forEach(function (a) { if (!a.period) a.period = PERIODS[0]; });
     }
     if (!state || !state.users) { state = seed(); persistLocal(); }
+    // 恢复"未同步改动"标记：若上次退出时仍有没推上云的记录，重启后自动补推，杜绝静默丢失
+    try { dirtySinceSync = localStorage.getItem(DIRTY_KEY) === '1'; } catch (e) {}
+    if (dirtySinceSync && state && state.users) scheduleCloud();
     return state;
   }
   function save() {
     dirtySinceSync = true; // 本地产生改动，标记待同步（供闲时/关闭前强推与防 ping-pong）
-    try { localStorage.setItem(KEY, JSON.stringify(state)); }
+    try { localStorage.setItem(KEY, JSON.stringify(state)); localStorage.setItem(DIRTY_KEY, '1'); }
     catch (e) { console.warn('保存失败', e); }
     scheduleCloud();
   }
@@ -1500,6 +1534,7 @@ var Store = (function () {
     SUBJECTS: SUBJECTS, GRADES: GRADES, GRADE_TEXT: GRADE_TEXT, GRADE_COLOR: GRADE_COLOR, ROLE_TEXT: ROLE_TEXT,
     CULTURE_SUBJECTS: CULTURE_SUBJECTS, SHIFTS: SHIFTS, shift: shift, PERIODS: PERIODS,
     load: load, save: save, data: data, resetDemo: resetDemo, hydrate: hydrate, merge: merge, syncFromCloud: syncFromCloud, bootstrap: bootstrap, poll: poll, pushNow: pushNow, hasRealData: hasRealData, migrateInlineImages: migrateInlineImages,
+    onSync: onSync, getSyncState: getSyncState,
     deepSync: deepSync, flush: flush, fullPull: fullPull, getLastFullSync: getLastFullSync,
     login: login, logout: logout, currentUser: currentUser, changePassword: changePassword, needsPasswordChange: needsPasswordChange,
     getStudent: getStudent, getClass: getClass, className: className, allStudents: allStudents,

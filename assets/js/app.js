@@ -202,6 +202,14 @@ var App = (function () {
     }).catch(function () { try { render(); } catch (e) {} });
     // 云端定时/切回前台刷新，保证多设备共享同一份数据
     if (window.Cloud && Cloud.ready()) {
+      // 同步状态条：让用户随时看到"改动是否成功上云"，杜绝"本地成功但云端没推上去"的静默失败
+      Store.onSync(function (s) {
+        var bar = document.getElementById('syncbar');
+        if (!bar) { bar = document.createElement('div'); bar.id = 'syncbar'; bar.className = 'syncbar'; document.body.appendChild(bar); }
+        if (s === 'syncing') { bar.textContent = '⏳ 正在同步到云端…'; bar.className = 'syncbar show info'; }
+        else if (s === 'error' || s === 'dirty') { bar.textContent = '⚠️ 有改动尚未同步到云端，请保持本页面打开'; bar.className = 'syncbar show warn'; }
+        else { bar.className = 'syncbar'; bar.textContent = ''; }
+      });
       function safeRender() {
         var modalOpen = document.getElementById('modal-root') && document.getElementById('modal-root').children.length;
         if (!modalOpen) render();
@@ -229,6 +237,8 @@ var App = (function () {
         else { Store.fullPull().then(function (res) { if (res && res.r) safeRender(); }); }
       });
       window.addEventListener('online', syncTick);
+      // 启动后主动补推本地可能滞留的未同步改动（如之前因网络失败没推上去的记录）
+      Store.pushNow();
       // B：闲时(无人使用 / 凌晨)全量对账。空闲 3 分钟或页面在后台时，每 1 分钟检查一次，
       // 做一次完整的双向 reconcile 弥补白天因同步慢漏掉的数据；用 dirtySinceSync 与 meta 防 ping-pong。
       setInterval(function () {

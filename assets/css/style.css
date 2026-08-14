@@ -548,6 +548,18 @@ input[type=range]::-moz-range-thumb {
 .toast.err { background: #B91C1C; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: none; } }
 
+/* 云端同步状态条：随时提示"改动是否成功上云" */
+.syncbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 300;
+  display: none; align-items: center; justify-content: center; gap: 8px;
+  padding: 9px 16px; font-size: 13px; font-weight: 600; letter-spacing: .2px;
+  transform: translateY(100%); transition: transform .25s ease, opacity .25s ease; opacity: 0;
+}
+.syncbar.show { display: flex; transform: translateY(0); opacity: 1; }
+.syncbar.info { background: #1D4ED8; color: #fff; }
+.syncbar.warn { background: #B45309; color: #FFFBEB; }
+.syncbar::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 4px rgba(255,255,255,.25); }
+
 /* 图表 */
 .chart-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--text-2); }
 .chart-legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 6px; }
