@@ -683,7 +683,10 @@ Views.submit = {
         images = images.concat(ids);
         renderThumbs();
         UI.toast('图片已添加', 'ok');
-      }).catch(function () { pendingUpload = Math.max(0, pendingUpload - 1); });
+      }).catch(function () {
+        pendingUpload = Math.max(0, pendingUpload - 1);
+        UI.toast('图片处理失败，请重试', 'err');
+      });
     };
 
     UI.el('#sbSave').onclick = function () {
@@ -746,7 +749,18 @@ function uploadHomeworkPhotos(sid, date, subj) {
           }
           return r.thumb;
         });
-      })).then(resolve).catch(function () { UI.toast('图片处理失败，请重试', 'err'); resolve([]); });
+      })).then(function (ids) {
+        var kept = ids.filter(Boolean);
+        if (kept.length < ids.length) {
+          UI.toast((ids.length - kept.length) + ' 张照片处理失败（多为手机 HEIC 格式），已跳过，可换 JPEG 重试', 'err');
+        }
+        resolve(kept);
+      }).catch(function (err) {
+        var msg = (err && err.unsupported)
+          ? '照片格式手机不支持（多为 HEIC），请到 iPhone 设置→相机→格式→改为「兼容性最佳」，或点「从相册」选 JPEG 照片'
+          : '图片处理失败，请重试（可换一张或重启页面）';
+        UI.toast(msg, 'err'); resolve([]);
+      });
     };
     input.click();
   });

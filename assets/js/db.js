@@ -165,31 +165,79 @@ var DB = (function () {
     return new Blob([arr], { type: mime });
   }
 
+  function bitmapToDataURL(bmp, q) {
+    var cv = document.createElement('canvas');
+    cv.width = bmp.width; cv.height = bmp.height;
+    var ctx = cv.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.drawImage(bmp, 0, 0);
+    return cv.toDataURL('image/jpeg', q);
+  }
   function compress(file, maxSide, quality) {
+    var side = maxSide || 1280, q = quality || 0.82;
     return new Promise(function (resolve, reject) {
+      function fail(err) {
+        err = err || new Error('图片处理失败');
+        err.unsupported = true; // 解码失败多为手机不支持的格式（HEIC / ProRAW）
+        reject(err);
+      }
+      // 主路径：createImageBitmap 在「解码阶段」即按目标尺寸缩放，内存占用极小；
+      // 并自动校正拍摄方向（imageOrientation: 'from-image'）。
+      // 可彻底缓解 iOS 连续拍多张高像素照片导致的内存溢出（原 FileReader+Image 方案易在此类场景失败）。
+      if (typeof window.createImageBitmap === 'function') {
+        var probe;
+        try { probe = createImageBitmap(file); } catch (e) { probe = null; }
+        if (probe && typeof probe.then === 'function') {
+          probe.then(function (b0) {
+            var w = b0.width || side, h = b0.height || side;
+            if (b0.close) b0.close();
+            var scale = Math.min(1, side / Math.max(w, h));
+            var rw = Math.max(1, Math.round(w * scale));
+            var rh = Math.max(1, Math.round(h * scale));
+            var tw = Math.min(420, rw);
+            var th = Math.round(rh * (tw / rw));
+            Promise.all([
+              createImageBitmap(file, { resizeWidth: rw, resizeHeight: rh, imageOrientation: 'from-image' }),
+              createImageBitmap(file, { resizeWidth: tw, resizeHeight: th, imageOrientation: 'from-image' })
+            ]).then(function (bmps) {
+              try {
+                var full = bitmapToDataURL(bmps[0], q);
+                var thumb = bitmapToDataURL(bmps[1], 0.72);
+                if (bmps[0].close) bmps[0].close();
+                if (bmps[1].close) bmps[1].close();
+                resolve({ full: full, thumb: thumb });
+              } catch (e) { fail(e); }
+            }).catch(fail);
+          }).catch(fail);
+          return;
+        }
+      }
+      // 兜底：FileReader + Image（个别老旧环境）
       var reader = new FileReader();
+      reader.onerror = fail;
       reader.onload = function () {
         var img = new Image();
+        img.onerror = fail;
         img.onload = function () {
-          function draw(side, q) {
-            var w = img.width, h = img.height;
-            var scale = Math.min(1, side / Math.max(w, h));
-            var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+          function draw(cw, ch, qq) {
             var cv = document.createElement('canvas');
             cv.width = cw; cv.height = ch;
             var ctx = cv.getContext('2d');
             ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
             ctx.drawImage(img, 0, 0, cw, ch);
-            return cv.toDataURL('image/jpeg', q);
+            return cv.toDataURL('image/jpeg', qq);
           }
           try {
-            resolve({ full: draw(maxSide || 1280, quality || 0.82), thumb: draw(420, 0.72) });
-          } catch (e) { reject(e); }
+            var w = img.width || side, h = img.height || side;
+            var scale = Math.min(1, side / Math.max(w, h));
+            var rw = Math.max(1, Math.round(w * scale));
+            var rh = Math.max(1, Math.round(h * scale));
+            var tw = Math.min(420, rw);
+            resolve({ full: draw(rw, rh, q), thumb: draw(tw, Math.round(rh * (tw / rw)), 0.72) });
+          } catch (e) { fail(e); }
         };
-        img.onerror = reject;
         img.src = reader.result;
       };
-      reader.onerror = reject;
       reader.readAsDataURL(file);
     });
   }
