@@ -675,15 +675,19 @@ Views.submit = {
       b.onclick = function () { range.value = b.dataset.prog; syncProg(); };
     });
 
+    var pendingUpload = 0;
     UI.el('#upBox').onclick = function () {
+      pendingUpload++;
       uploadHomeworkPhotos(sid, date, subj).then(function (ids) {
+        pendingUpload = Math.max(0, pendingUpload - 1);
         images = images.concat(ids);
         renderThumbs();
         UI.toast('图片已添加', 'ok');
-      });
+      }).catch(function () { pendingUpload = Math.max(0, pendingUpload - 1); });
     };
 
     UI.el('#sbSave').onclick = function () {
+      if (pendingUpload > 0) { UI.toast('图片还在处理中，请稍候…', 'err'); return; }
       var payload = {
         studentId: sid, date: date, subject: subj, shift: shiftPick,
         count: Math.max(1, +cnt.value || 1),
@@ -733,11 +737,12 @@ function uploadHomeworkPhotos(sid, date, subj) {
       var useStorage = !!(window.Cloud && Cloud.ready() && Cloud.uploadImage);
       Promise.all(files.map(function (f, i) {
         return DB.compress(f, 1280, 0.82).then(function (r) {
+          // 始终以内联缩略图(data URL)作为展示源：保证任意设备 / 任何网络下都能立即显示，
+          // 不再依赖 Supabase 存储桶的公开访问权限（私有桶时 URL 无法加载，正是「拍了不显示」的根因）。
+          // 同时后台把高清原图传到云端存储桶作可选增强，失败静默忽略，绝不影响显示与提交。
           if (useStorage) {
             var path = 'hw/' + sid + '/' + date + '/' + subj + '/' + Date.now() + '_' + i + '.jpg';
-            return Cloud.uploadImage(durlToBlob(r.full), path)
-              .then(function (url) { return url; })
-              .catch(function () { return r.thumb; });
+            Cloud.uploadImage(durlToBlob(r.full), path).catch(function () {});
           }
           return r.thumb;
         });
@@ -756,6 +761,7 @@ function openTeacherUpload(studentId) {
   var tuImages = [];
   var tuSubj = 'color';
   var tuShift = 'day';
+  var tuPending = 0;
 
   var body =
     '<div class="field"><label>学生</label>' +
@@ -820,14 +826,17 @@ function openTeacherUpload(studentId) {
       var range = UI.el('#tuProg', m);
       range.oninput = function () { UI.el('#tuProgVal', m).textContent = range.value + '%'; };
       UI.el('#tuUp', m).onclick = function () {
+        tuPending++;
         uploadHomeworkPhotos(sid, UI.el('#tuDate', m).value, tuSubj).then(function (ids) {
+          tuPending = Math.max(0, tuPending - 1);
           tuImages = tuImages.concat(ids); renderThumbs(); UI.toast('图片已添加', 'ok');
-        });
+        }).catch(function () { tuPending = Math.max(0, tuPending - 1); });
       };
     },
     onOk: function (m) {
       var pickSid = studentId ? sid : UI.el('#tuSt', m).value;
       if (!pickSid) { UI.toast('请选择学生', 'err'); return false; }
+      if (tuPending > 0) { UI.toast('图片还在处理中，请稍候…', 'err'); return false; }
       var date = UI.el('#tuDate', m).value || today;
       var subjEl = m.querySelector('#tuSubj .sp-item.on');
       var subj = subjEl ? subjEl.dataset.sub : 'color';
