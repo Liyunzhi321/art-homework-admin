@@ -165,80 +165,77 @@ var DB = (function () {
     return new Blob([arr], { type: mime });
   }
 
-  function bitmapToDataURL(bmp, q) {
+  /* 把位图/图片绘制到「指定小尺寸」canvas 并导出 JPEG dataURL。
+     关键：直接在目标尺寸上 drawImage，峰值内存极低（不再生成全尺寸 dataURL 或滞留全尺寸位图）。 */
+  function drawScaled(src, w, h, q) {
     var cv = document.createElement('canvas');
-    cv.width = bmp.width; cv.height = bmp.height;
+    cv.width = w; cv.height = h;
     var ctx = cv.getContext('2d');
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cv.width, cv.height);
-    ctx.drawImage(bmp, 0, 0);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+    try { ctx.drawImage(src, 0, 0, w, h); } catch (e) { try { ctx.drawImage(src, 0, 0); } catch (_) {} }
     return cv.toDataURL('image/jpeg', q);
   }
+
+  /* 兜底：无 createImageBitmap 的极老旧环境，用 FileReader + Image 解码后缩图 */
+  function legacyCompress(file, side, q, resolve, fail) {
+    var reader = new FileReader();
+    reader.onerror = function () { fail(reader.error || new Error('读取失败')); };
+    reader.onload = function () {
+      var img = new Image();
+      img.onerror = function () { fail(new Error('解码失败（多为手机 HEIC 格式）')); };
+      img.onload = function () {
+        try {
+          var w = img.width || side, h = img.height || side;
+          var scale = Math.min(1, side / Math.max(w, h));
+          var dw = Math.max(1, Math.round(w * scale));
+          var dh = Math.max(1, Math.round(h * scale));
+          var tw = Math.min(420, dw);
+          var thumbH = Math.max(1, Math.round(dh * (tw / dw)));
+          resolve({ full: drawScaled(img, dw, dh, q), thumb: drawScaled(img, tw, thumbH, 0.72) });
+        } catch (e) { fail(e); }
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
   function compress(file, maxSide, quality) {
     var side = maxSide || 1280, q = quality || 0.82;
     return new Promise(function (resolve, reject) {
+      var done = false;
+      function finish(fn, arg) { if (done) return; done = true; fn(arg); }
       function fail(err) {
         err = err || new Error('图片处理失败');
         err.unsupported = true; // 解码失败多为手机不支持的格式（HEIC / ProRAW）
-        reject(err);
+        finish(reject, err);
       }
-      // 主路径：createImageBitmap 在「解码阶段」即按目标尺寸缩放，内存占用极小；
-      // 并自动校正拍摄方向（imageOrientation: 'from-image'）。
-      // 可彻底缓解 iOS 连续拍多张高像素照片导致的内存溢出（原 FileReader+Image 方案易在此类场景失败）。
+      if (!file) return fail(new Error('未选择文件'));
+
       if (typeof window.createImageBitmap === 'function') {
-        var probe;
-        try { probe = createImageBitmap(file); } catch (e) { probe = null; }
-        if (probe && typeof probe.then === 'function') {
-          probe.then(function (b0) {
-            var w = b0.width || side, h = b0.height || side;
-            if (b0.close) b0.close();
-            var scale = Math.min(1, side / Math.max(w, h));
-            var rw = Math.max(1, Math.round(w * scale));
-            var rh = Math.max(1, Math.round(h * scale));
-            var tw = Math.min(420, rw);
-            var th = Math.round(rh * (tw / rw));
-            Promise.all([
-              createImageBitmap(file, { resizeWidth: rw, resizeHeight: rh, imageOrientation: 'from-image' }),
-              createImageBitmap(file, { resizeWidth: tw, resizeHeight: th, imageOrientation: 'from-image' })
-            ]).then(function (bmps) {
-              try {
-                var full = bitmapToDataURL(bmps[0], q);
-                var thumb = bitmapToDataURL(bmps[1], 0.72);
-                if (bmps[0].close) bmps[0].close();
-                if (bmps[1].close) bmps[1].close();
-                resolve({ full: full, thumb: thumb });
-              } catch (e) { fail(e); }
-            }).catch(fail);
-          }).catch(fail);
-          return;
-        }
-      }
-      // 兜底：FileReader + Image（个别老旧环境）
-      var reader = new FileReader();
-      reader.onerror = fail;
-      reader.onload = function () {
-        var img = new Image();
-        img.onerror = fail;
-        img.onload = function () {
-          function draw(cw, ch, qq) {
-            var cv = document.createElement('canvas');
-            cv.width = cw; cv.height = ch;
-            var ctx = cv.getContext('2d');
-            ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
-            ctx.drawImage(img, 0, 0, cw, ch);
-            return cv.toDataURL('image/jpeg', qq);
-          }
+        // 解码阶段即按 EXIF 方向校正；老旧浏览器不支持该选项时回落到不校正（能上传，最多方向略偏）。
+        // 不再依赖 resizeWidth/resizeHeight 选项——旧版 iOS Safari 不支持会被忽略，导致退回全尺寸位图而内存溢出。
+        var decodeOpts;
+        try { decodeOpts = { imageOrientation: 'from-image' }; } catch (e) { decodeOpts = undefined; }
+        window.createImageBitmap(file, decodeOpts).then(function (bmp) {
           try {
-            var w = img.width || side, h = img.height || side;
-            var scale = Math.min(1, side / Math.max(w, h));
-            var rw = Math.max(1, Math.round(w * scale));
-            var rh = Math.max(1, Math.round(h * scale));
-            var tw = Math.min(420, rw);
-            resolve({ full: draw(rw, rh, q), thumb: draw(tw, Math.round(rh * (tw / rw)), 0.72) });
-          } catch (e) { fail(e); }
-        };
-        img.src = reader.result;
-      };
-      reader.readAsDataURL(file);
+            if (!bmp || !bmp.width) { if (bmp && bmp.close) bmp.close(); return fail(new Error('图片解码失败')); }
+            var ow = bmp.width, oh = bmp.height;
+            var scale = Math.min(1, side / Math.max(ow, oh));
+            var dw = Math.max(1, Math.round(ow * scale));
+            var dh = Math.max(1, Math.round(oh * scale));
+            var tw = Math.min(420, dw), th = Math.max(1, Math.round(dh * (tw / dw)));
+            // 直接把位图绘制到「小尺寸」canvas，峰值内存极低；绘制完立即 close 释放。
+            var full = drawScaled(bmp, dw, dh, q);
+            var thumb = drawScaled(bmp, tw, th, 0.72);
+            if (bmp.close) bmp.close();
+            finish(resolve, { full: full, thumb: thumb });
+          } catch (e) { try { if (bmp && bmp.close) bmp.close(); } catch (_) {} fail(e); }
+        }).catch(function () {
+          legacyCompress(file, side, q, function (r) { finish(resolve, r); }, fail);
+        });
+        return;
+      }
+      legacyCompress(file, side, q, function (r) { finish(resolve, r); }, fail);
     });
   }
 
