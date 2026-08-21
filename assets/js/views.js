@@ -677,6 +677,7 @@ Views.submit = {
 
     var pendingUpload = 0;
     UI.el('#upBox').onclick = function () {
+      if (pendingUpload > 0) { UI.toast('已有图片在处理中，请稍候…', 'err'); return; }
       pendingUpload++;
       uploadHomeworkPhotos(sid, date, subj).then(function (ids) {
         pendingUpload = Math.max(0, pendingUpload - 1);
@@ -730,22 +731,41 @@ function uploadHomeworkPhotos(sid, date, subj) {
   }
   var input = document.createElement('input');
   input.type = 'file'; input.accept = 'image/*'; input.multiple = true;
+  // 【iOS Safari 关键修复】动态创建的 file input 若不挂到 DOM，会被 GC 回收，
+  // 导致拍完照点「使用照片」后 onchange 不触发 / 文件读不到 → 照片永远「传不上」。
+  // 挂到 body 并保留引用即可让它存活到 onchange 触发。
+  // 注意：left:-9999px 在部分 iOS 上会被视为「不可见」而拒绝唤起相机，
+  // 故改为视口内透明占位（opacity:0），pointer-events:none 避免误触。
+  input.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none;z-index:-1';
+  document.body.appendChild(input);
   return new Promise(function (resolve) {
-    input.onchange = function () {
+    var resolved = false;
+    function done(val) {
+      if (resolved) return;
+      resolved = true;
+      try { clearTimeout(timer); } catch (e) {}
+      try { document.body.removeChild(input); } catch (e) {}
+      resolve(val || []);
+    }
+    // 致命兜底：iOS 取消选择、文件选择器未唤起、onchange 漏发时，
+    // Promise 若一直挂起会导致 pendingUpload 锁死，页面再也无法提交。
+    var timer = setTimeout(function () { done([]); }, 15000);
+
+    input.addEventListener('change', function () {
       var files = Array.prototype.slice.call(input.files || []);
-      if (!files.length) { resolve([]); return; }
+      if (!files.length) { done([]); return; }
       UI.toast('正在处理 ' + files.length + ' 张图片…');
-      // 优先上传到云端存储桶（拿到 URL），数据 JSON 不再内嵌大图，跨设备同步飞快；
-      // 若未连接云端或存储桶不可用，则回退为内联 data URL，绝不丢图。
+      // 始终以内联缩略图(data URL)作为展示源：保证任意设备 / 任何网络下都能立即显示，
+      // 不再依赖 Supabase 存储桶的公开访问权限（私有桶时 URL 无法加载，正是「拍了不显示」的根因）。
       var useStorage = !!(window.Cloud && Cloud.ready() && Cloud.uploadImage);
       Promise.all(files.map(function (f, i) {
         return DB.compress(f, 1280, 0.82).then(function (r) {
-          // 始终以内联缩略图(data URL)作为展示源：保证任意设备 / 任何网络下都能立即显示，
-          // 不再依赖 Supabase 存储桶的公开访问权限（私有桶时 URL 无法加载，正是「拍了不显示」的根因）。
-          // 同时后台把高清原图传到云端存储桶作可选增强，失败静默忽略，绝不影响显示与提交。
+          // 后台把高清原图传到云端存储桶作可选增强；用 try 包裹防止同步抛错连累整批上传。
           if (useStorage) {
-            var path = 'hw/' + sid + '/' + date + '/' + subj + '/' + Date.now() + '_' + i + '.jpg';
-            Cloud.uploadImage(durlToBlob(r.full), path).catch(function () {});
+            try {
+              var p = Cloud.uploadImage(durlToBlob(r.full), 'hw/' + sid + '/' + date + '/' + subj + '/' + Date.now() + '_' + i + '.jpg');
+              if (p && p.catch) p.catch(function () {});
+            } catch (e) {}
           }
           return r.thumb;
         });
@@ -754,15 +774,18 @@ function uploadHomeworkPhotos(sid, date, subj) {
         if (kept.length < ids.length) {
           UI.toast((ids.length - kept.length) + ' 张照片处理失败（多为手机 HEIC 格式），已跳过，可换 JPEG 重试', 'err');
         }
-        resolve(kept);
+        done(kept);
       }).catch(function (err) {
         var msg = (err && err.unsupported)
           ? '照片格式手机不支持（多为 HEIC），请到 iPhone 设置→相机→格式→改为「兼容性最佳」，或点「从相册」选 JPEG 照片'
           : '图片处理失败，请重试（可换一张或重启页面）';
-        UI.toast(msg, 'err'); resolve([]);
+        UI.toast(msg, 'err'); done([]);
       });
-    };
-    input.click();
+    });
+    // iOS 16+ 用户点「取消」时会触发 cancel 事件
+    input.addEventListener('cancel', function () { done([]); });
+    // 必须在用户手势内「同步」触发 click，iOS Safari 才会正常唤起相机并回传文件
+    try { input.click(); } catch (e) { done([]); }
   });
 }
 
@@ -840,6 +863,7 @@ function openTeacherUpload(studentId) {
       var range = UI.el('#tuProg', m);
       range.oninput = function () { UI.el('#tuProgVal', m).textContent = range.value + '%'; };
       UI.el('#tuUp', m).onclick = function () {
+        if (tuPending > 0) { UI.toast('已有图片在处理中，请稍候…', 'err'); return; }
         tuPending++;
         uploadHomeworkPhotos(sid, UI.el('#tuDate', m).value, tuSubj).then(function (ids) {
           tuPending = Math.max(0, tuPending - 1);
